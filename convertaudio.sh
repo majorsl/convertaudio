@@ -5,7 +5,7 @@
 DEFAULT_WORKINGDIRECTORY="/media/majorsl/e9ef2c72-9134-4418-86dc-10742b12d0ed/Downloads/Sonarr/"
 MKVMERGE="/usr/bin/"
 JQ="/usr/bin/"
-# Modify lines 34 and 44 for the audio languages you want to keep!
+# Modify lines 32, 42 and 56 for the audio languages you want to keep!
 # -----------------------------------------------------------------------------------------------
 
 IFS=$'\n'
@@ -28,7 +28,7 @@ process_file() {
     # Get the JSON metadata from mkvmerge
     local json=$("$MKVMERGE"mkvmerge -J "$input_file")
 
-    # Parse the JSON to identify audio tracks to remove (non-English)
+    # Parse the JSON to identify audio tracks to remove
     local tracks_to_remove=($(echo "$json" | "$JQ"jq -r '.tracks[] | select(.type == "audio" and (.properties.language != "eng" and .properties.language != "en" and .properties.language != "und")) | .properties.number'))
     
     # Display tracks to remove
@@ -38,7 +38,7 @@ process_file() {
     if [ ${#tracks_to_remove[@]} -gt 0 ]; then
         local output_file="${input_file%.mkv}-no-audio.mkv"
 
-        # Run mkvmerge to create the new file with only English/undetermined audio
+        # Run mkvmerge to create the new file with only the wanted audio
         "$MKVMERGE"mkvmerge -o "$output_file" -a "en,eng,und" "$input_file" || {
             echo "Error processing file: $input_file"
             return 1
