@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Version 1.0 *See README.md for requirements*
+# Version 1.1 *See README.md for requirements*
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
-DEFAULT_WORKINGDIRECTORY="/media/majorsl/e9ef2c72-9134-4418-86dc-10742b12d0ed/Downloads/Sonarr/"
+# Path to mkvmerge
 MKVMERGE="/usr/bin/"
+# Path to jq
 JQ="/usr/bin/"
-# Modify lines 32, 42 and 56 for the audio languages you want to keep!
+# Modify lines 33, 43 and 57 for the audio languages you want to keep!
 # -----------------------------------------------------------------------------------------------
 
 IFS=$'\n'
@@ -61,7 +62,8 @@ process_file() {
 if [ -n "$1" ]; then
   dir="$1"
 else
-  dir="$DEFAULT_WORKINGDIRECTORY"
+  echo "Please call the script with a trailing directory part to process."
+  exit 0
 fi
 
 if [ ! -d "$dir" ]; then
