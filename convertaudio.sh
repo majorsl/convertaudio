@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1.1 *See README.md for requirements*
+# Version 1.1.2 *See README.md for requirements*
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
 # Path to mkvmerge
@@ -16,11 +16,21 @@ if ! command -v "$JQ"jq &> /dev/null; then
     echo "jq could not be found. Please install it."
     exit 1
 fi
-
 if ! command -v "$MKVMERGE"mkvmerge &> /dev/null; then
     echo "mkvmerge could not be found. Please install it."
     exit 1
 fi
+
+# Function to check if a -no-audio file exists in the directory
+check_for_no_audio_files() {
+    local dir="$1"
+    
+    # Loop until no -no-audio file is found
+    while find "$dir" -type f -name "*-no-audio.mkv" | grep -q .; do
+        echo "A '-no-audio' file exists. Pausing script until it is processed..."
+        sleep 30
+    done
+}
 
 # Function to process a single MKV file
 process_file() {
@@ -70,6 +80,9 @@ if [ ! -d "$dir" ]; then
   echo "Directory doesn't exist, aborting."
   exit
 fi
+
+# Check if any '-no-audio' file exists and pause until it is processed
+check_for_no_audio_files "$dir"
 
 # Find all MKV files in the directory and process each one
 find "$dir" -type f -name "*.mkv" | while read -r file; do
