@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1.2.0 - Adds locking via flock for safe concurrent usage
+# Version 1.2.1 - Adds locking via flock for safe concurrent usage
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
 MKVMERGE="/usr/bin/"
@@ -12,8 +12,8 @@ IFS=$'\n'
 
 # Acquire exclusive lock using file descriptor 200
 exec 200>"$LOCKFILE"
-flock -n 200 || {
-  echo "Another instance of this script is running. Exiting."
+flock -w 600 200 || {
+  echo "Timeout waiting for lock (10 minutes). Another instance may be stuck. Exiting."
   exit 1
 }
 
