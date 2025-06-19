@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Version 1.1.2 *See README.md for requirements*
+# Version 1.2.0 - Adds locking via flock for safe concurrent usage
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
-# Path to mkvmerge
 MKVMERGE="/usr/bin/"
-# Path to jq
 JQ="/usr/bin/"
+LOCKFILE="/tmp/mkv_cleanup.lock"
 # Modify lines 33, 43 and 57 for the audio languages you want to keep!
 # -----------------------------------------------------------------------------------------------
 
 IFS=$'\n'
+
+# Acquire exclusive lock using file descriptor 200
+exec 200>"$LOCKFILE"
+flock -n 200 || {
+  echo "Another instance of this script is running. Exiting."
+  exit 1
+}
 
 # Check for required tools
 if ! command -v "$JQ"jq &> /dev/null; then
@@ -21,41 +27,24 @@ if ! command -v "$MKVMERGE"mkvmerge &> /dev/null; then
     exit 1
 fi
 
-# Function to check if a -no-audio file exists in the directory
-check_for_no_audio_files() {
-    local dir="$1"
-    
-    # Loop until no -no-audio file is found
-    while find "$dir" -type f -name "*-no-audio.mkv" | grep -q .; do
-        echo "A '-no-audio' file exists. Pausing script until it is processed..."
-        sleep 30
-    done
-}
-
 # Function to process a single MKV file
 process_file() {
     local input_file="$1"
     
-    # Get the JSON metadata from mkvmerge
     local json=$("$MKVMERGE"mkvmerge -J "$input_file")
 
-    # Parse the JSON to identify audio tracks to remove
     local tracks_to_remove=($(echo "$json" | "$JQ"jq -r '.tracks[] | select(.type == "audio" and (.properties.language != "eng" and .properties.language != "en" and .properties.language != "und")) | .properties.number'))
     
-    # Display tracks to remove
     echo "Tracks to remove: ${tracks_to_remove[@]}"
     
-    # If there are audio tracks to remove, run mkvmerge to create a new file
     if [ ${#tracks_to_remove[@]} -gt 0 ]; then
-        local output_file="${input_file%.mkv}-no-audio.mkv"
+        local output_file="${input_file%.mkv}.tmp.mkv"
 
-        # Run mkvmerge to create the new file with only the wanted audio
         "$MKVMERGE"mkvmerge -o "$output_file" -a "en,eng,und" "$input_file" || {
             echo "Error processing file: $input_file"
             return 1
         }
         
-        # If mkvmerge succeeds, overwrite the original file
         if [ -f "$output_file" ]; then
             mv "$output_file" "$input_file"
             echo "Successfully updated file: $input_file"
@@ -68,23 +57,20 @@ process_file() {
     fi
 }
 
-# Check if a directory is passed as an argument
+# Check directory argument
 if [ -n "$1" ]; then
   dir="$1"
 else
   echo "Please call the script with a trailing directory part to process."
-  exit 0
+  exit 1
 fi
 
 if [ ! -d "$dir" ]; then
   echo "Directory doesn't exist, aborting."
-  exit
+  exit 1
 fi
 
-# Check if any '-no-audio' file exists and pause until it is processed
-check_for_no_audio_files "$dir"
-
-# Find all MKV files in the directory and process each one
+# Process all .mkv files
 find "$dir" -type f -name "*.mkv" | while read -r file; do
     process_file "$file"
 done
