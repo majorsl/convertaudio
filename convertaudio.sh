@@ -1,76 +1,83 @@
 #!/usr/bin/env bash
-# Version 1.2.1 - Adds locking via flock for safe concurrent usage
+# Version 1.2.4 - Skips foreign-only audio files with no matching tracks
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
-MKVMERGE="/usr/bin/"
-JQ="/usr/bin/"
+MKVMERGE="/usr/bin/mkvmerge"
+JQ="/usr/bin/jq"
 LOCKFILE="/tmp/mkv_cleanup.lock"
-# Modify lines 33, 43 and 57 for the audio languages you want to keep!
+# Modify line 59 for the audio languages you want to keep!
 # -----------------------------------------------------------------------------------------------
 
 IFS=$'\n'
 
-# Acquire exclusive lock using file descriptor 200
+# 🔒 Acquire exclusive lock using file descriptor 200
 exec 200>"$LOCKFILE"
 flock -w 600 200 || {
-  echo "Timeout waiting for lock (10 minutes). Another instance may be stuck. Exiting."
+  echo "⏳ Timeout waiting for lock (10 minutes). Another instance may be stuck. Exiting."
   exit 1
 }
 
-# Check for required tools
-if ! command -v "$JQ"jq &> /dev/null; then
-    echo "jq could not be found. Please install it."
+# 🔍 Check for required tools
+if ! command -v "$JQ" &> /dev/null; then
+    echo "❌ jq could not be found. Please install it."
     exit 1
 fi
-if ! command -v "$MKVMERGE"mkvmerge &> /dev/null; then
-    echo "mkvmerge could not be found. Please install it."
+if ! command -v "$MKVMERGE" &> /dev/null; then
+    echo "❌ mkvmerge could not be found. Please install it."
     exit 1
 fi
 
-# Function to process a single MKV file
+# 🧹 Function to process a single MKV file
 process_file() {
     local input_file="$1"
+    echo -e "\n📦 Processing: $input_file"
     
-    local json=$("$MKVMERGE"mkvmerge -J "$input_file")
+    local json=$("$MKVMERGE" -J "$input_file")
 
-    local tracks_to_remove=($(echo "$json" | "$JQ"jq -r '.tracks[] | select(.type == "audio" and (.properties.language != "eng" and .properties.language != "en" and .properties.language != "und")) | .properties.number'))
-    
-    echo "Tracks to remove: ${tracks_to_remove[@]}"
-    
-    if [ ${#tracks_to_remove[@]} -gt 0 ]; then
-        local output_file="${input_file%.mkv}.tmp.mkv"
+    # 🎯 Get IDs of audio tracks with desired languages
+    local wanted_tracks=($(echo "$json" | "$JQ" -r '.tracks[] | select(.type == "audio" and (.properties.language == "eng" or .properties.language == "en" or .properties.language == "und")) | .id'))
 
-        "$MKVMERGE"mkvmerge -o "$output_file" -a "en,eng,und" "$input_file" || {
-            echo "Error processing file: $input_file"
-            return 1
-        }
-        
-        if [ -f "$output_file" ]; then
-            mv "$output_file" "$input_file"
-            echo "Successfully updated file: $input_file"
-        else
-            echo "Error: New file was not created."
-            return 1
-        fi
+    if [ ${#wanted_tracks[@]} -eq 0 ]; then
+        echo "⏭️  Skipping (foreign-only): No matching English/und audio tracks."
+        return 0
+    fi
+
+    echo "🔊 Keeping audio track IDs: ${wanted_tracks[@]}"
+
+    local output_file="${input_file%.mkv}.tmp.mkv"
+    local args=()
+    for id in "${wanted_tracks[@]}"; do
+        args+=("--audio-tracks" "$id")
+    done
+
+    "$MKVMERGE" -o "$output_file" "${args[@]}" "$input_file" || {
+        echo "❌ Error processing file!"
+        return 1
+    }
+
+    if [ -f "$output_file" ]; then
+        mv "$output_file" "$input_file"
+        echo "✅ Updated: $input_file"
     else
-        echo "No non-English audio tracks to remove in: $input_file"
+        echo "❌ Error: Temporary file was not created."
+        return 1
     fi
 }
 
-# Check directory argument
+# 📁 Check directory argument
 if [ -n "$1" ]; then
   dir="$1"
 else
-  echo "Please call the script with a trailing directory part to process."
+  echo "⚠️  Please provide a directory path as an argument."
   exit 1
 fi
 
 if [ ! -d "$dir" ]; then
-  echo "Directory doesn't exist, aborting."
+  echo "❌ Directory doesn't exist: $dir"
   exit 1
 fi
 
-# Process all .mkv files
+# 🔄 Process all MKV files in the directory
 find "$dir" -type f -name "*.mkv" | while read -r file; do
     process_file "$file"
 done
