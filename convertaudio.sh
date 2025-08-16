@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Version 1.2.4 - Skips foreign-only audio files with no matching tracks
+# Version 1.3.1 - Skips foreign-only audio files with no matching tracks
+#               - Shows tracks to keep and remove with IDs and languages
+#               - Skips rewrite if no tracks need to be removed
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
 MKVMERGE="/usr/bin/mkvmerge"
 JQ="/usr/bin/jq"
 LOCKFILE="/tmp/mkv_cleanup.lock"
-# Modify line 59 for the audio languages you want to keep!
+# Modify line 66 for the audio languages you want to keep!
 # -----------------------------------------------------------------------------------------------
 
 IFS=$'\n'
@@ -34,16 +36,39 @@ process_file() {
     
     local json=$("$MKVMERGE" -J "$input_file")
 
+    # 🎯 Get all audio track IDs and languages
+    local all_audio_info
+    all_audio_info=$(echo "$json" | "$JQ" -r '.tracks[] | select(.type == "audio") | "\(.id):\(.properties.language // "und")"')
+
     # 🎯 Get IDs of audio tracks with desired languages
     local wanted_tracks=($(echo "$json" | "$JQ" -r '.tracks[] | select(.type == "audio" and (.properties.language == "eng" or .properties.language == "en" or .properties.language == "und")) | .id'))
 
     if [ ${#wanted_tracks[@]} -eq 0 ]; then
-        echo "⏭️  Skipping (foreign-only): No matching English/und audio tracks."
+        echo "⏭️ Skipping (foreign-only): No matching English/und audio tracks."
         return 0
     fi
 
-    echo "🔊 Keeping audio track IDs: ${wanted_tracks[@]}"
+    # 🗑️ Compute tracks to remove (with languages)
+    local keep_set=" ${wanted_tracks[*]} "
+    local remove_info=()
+    for entry in $all_audio_info; do
+        id="${entry%%:*}"
+        lang="${entry#*:}"
+        if [[ ! $keep_set =~ " $id " ]]; then
+            remove_info+=("$id:$lang")
+        fi
+    done
 
+    # ✅ Log results
+    echo "🔊 Keeping audio track IDs: ${wanted_tracks[@]}"
+    if [ ${#remove_info[@]} -gt 0 ]; then
+        echo "🗑️ Removing audio tracks: ${remove_info[*]}"
+    else
+        echo "👌 No audio tracks to remove. Skipping rewrite."
+        return 0
+    fi
+
+    # 📦 Build mkvmerge args
     local output_file="${input_file%.mkv}.tmp.mkv"
     local args=()
     for id in "${wanted_tracks[@]}"; do
@@ -68,7 +93,7 @@ process_file() {
 if [ -n "$1" ]; then
   dir="$1"
 else
-  echo "⚠️  Please provide a directory path as an argument."
+  echo "⚠️ Please provide a directory path as an argument."
   exit 1
 fi
 
