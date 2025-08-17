@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# Version 1.3.1 - Skips foreign-only audio files with no matching tracks
-#               - Shows tracks to keep and remove with IDs and languages
-#               - Skips rewrite if no tracks need to be removed
+# Version 1.4.1 - Keeps all eng/en/und tracks
+#               - Fixes multiple --audio-tracks bug
+#               - Fixes incorrect "removing" log output
+#               - Removes global IFS override (cleaner output)
 
 # SET YOUR OPTIONS HERE -------------------------------------------------------------------------
 MKVMERGE="/usr/bin/mkvmerge"
 JQ="/usr/bin/jq"
 LOCKFILE="/tmp/mkv_cleanup.lock"
-# Modify line 66 for the audio languages you want to keep!
 # -----------------------------------------------------------------------------------------------
-
-IFS=$'\n'
 
 # 🔒 Acquire exclusive lock using file descriptor 200
 exec 200>"$LOCKFILE"
@@ -20,12 +18,12 @@ flock -w 600 200 || {
 }
 
 # 🔍 Check for required tools
-if ! command -v "$JQ" &> /dev/null; then
-    echo "❌ jq could not be found. Please install it."
+if [ ! -x "$JQ" ]; then
+    echo "❌ jq not found at $JQ"
     exit 1
 fi
-if ! command -v "$MKVMERGE" &> /dev/null; then
-    echo "❌ mkvmerge could not be found. Please install it."
+if [ ! -x "$MKVMERGE" ]; then
+    echo "❌ mkvmerge not found at $MKVMERGE"
     exit 1
 fi
 
@@ -33,34 +31,44 @@ fi
 process_file() {
     local input_file="$1"
     echo -e "\n📦 Processing: $input_file"
-    
-    local json=$("$MKVMERGE" -J "$input_file")
 
-    # 🎯 Get all audio track IDs and languages
+    local json
+    json=$("$MKVMERGE" -J "$input_file") || {
+        echo "❌ mkvmerge -J failed on: $input_file"
+        return 1
+    }
+
+    # 🎯 All audio tracks: id:lang
     local all_audio_info
-    all_audio_info=$(echo "$json" | "$JQ" -r '.tracks[] | select(.type == "audio") | "\(.id):\(.properties.language // "und")"')
+    all_audio_info=$(echo "$json" | "$JQ" -r \
+        '.tracks[] | select(.type=="audio") |
+         "\(.id):\(.properties.language // "und")"')
 
-    # 🎯 Get IDs of audio tracks with desired languages
-    local wanted_tracks=($(echo "$json" | "$JQ" -r '.tracks[] | select(.type == "audio" and (.properties.language == "eng" or .properties.language == "en" or .properties.language == "und")) | .id'))
+    # 🎯 Tracks to keep: ALL eng/en/und (as you wanted)
+    mapfile -t wanted_tracks < <(echo "$json" | "$JQ" -r \
+        '.tracks[] | select(.type=="audio" and
+          (.properties.language=="eng" or .properties.language=="en" or .properties.language=="und")) | .id')
 
     if [ ${#wanted_tracks[@]} -eq 0 ]; then
         echo "⏭️ Skipping (foreign-only): No matching English/und audio tracks."
         return 0
     fi
 
-    # 🗑️ Compute tracks to remove (with languages)
-    local keep_set=" ${wanted_tracks[*]} "
+    # ✅ Compute tracks to remove using associative array
+    declare -A keep_set_map=()
+    for id in "${wanted_tracks[@]}"; do keep_set_map["$id"]=1; done
+
     local remove_info=()
-    for entry in $all_audio_info; do
-        id="${entry%%:*}"
-        lang="${entry#*:}"
-        if [[ ! $keep_set =~ " $id " ]]; then
+    while IFS= read -r entry; do
+        local id="${entry%%:*}"
+        local lang="${entry#*:}"
+        if [[ -z ${keep_set_map[$id]} ]]; then
             remove_info+=("$id:$lang")
         fi
-    done
+    done <<< "$all_audio_info"
 
-    # ✅ Log results
-    echo "🔊 Keeping audio track IDs: ${wanted_tracks[@]}"
+    # ✅ Log
+    echo "🔊 Keeping audio track IDs: ${wanted_tracks[*]}"
     if [ ${#remove_info[@]} -gt 0 ]; then
         echo "🗑️ Removing audio tracks: ${remove_info[*]}"
     else
@@ -68,20 +76,18 @@ process_file() {
         return 0
     fi
 
-    # 📦 Build mkvmerge args
+    # 📦 Build mkvmerge args CORRECTLY (single --audio-tracks with comma list)
     local output_file="${input_file%.mkv}.tmp.mkv"
-    local args=()
-    for id in "${wanted_tracks[@]}"; do
-        args+=("--audio-tracks" "$id")
-    done
+    local audio_ids
+    audio_ids=$(IFS=,; echo "${wanted_tracks[*]}")
 
-    "$MKVMERGE" -o "$output_file" "${args[@]}" "$input_file" || {
+    "$MKVMERGE" -o "$output_file" --audio-tracks "$audio_ids" "$input_file" || {
         echo "❌ Error processing file!"
         return 1
     }
 
     if [ -f "$output_file" ]; then
-        mv "$output_file" "$input_file"
+        mv -f "$output_file" "$input_file"
         echo "✅ Updated: $input_file"
     else
         echo "❌ Error: Temporary file was not created."
@@ -103,8 +109,6 @@ if [ ! -d "$dir" ]; then
 fi
 
 # 🔄 Process all MKV files in the directory
-find "$dir" -type f -name "*.mkv" | while read -r file; do
+while IFS= read -r file; do
     process_file "$file"
-done
-
-unset IFS
+done < <(find "$dir" -type f -name "*.mkv")
